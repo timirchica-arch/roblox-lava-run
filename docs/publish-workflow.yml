@@ -1,0 +1,74 @@
+# Скопируй весь этот текст в новый файл с путём: .github/workflows/publish.yml
+# (Add file -> Create new file -> вставить имя со слешами -> вставить текст -> Commit changes)
+
+name: Публикация плейса
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-place
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Забрать код
+        uses: actions/checkout@v4
+
+      - name: Поставить Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Собрать плейс
+        run: |
+          set -o pipefail
+          python build_place.py 2>&1 | tee build.log
+
+      - name: Прочитать идентификаторы
+        id: ids
+        run: python tools/read_ids.py >> "$GITHUB_OUTPUT"
+
+      - name: Опубликовать в Roblox
+        env:
+          ROBLOX_API_KEY: ${{ secrets.ROBLOX_API_KEY }}
+          UNIVERSE_ID: ${{ steps.ids.outputs.universe }}
+          PLACE_ID: ${{ steps.ids.outputs.place }}
+          VERSION_TYPE: ${{ steps.ids.outputs.version_type }}
+        run: |
+          set -o pipefail
+          bash scripts/publish.sh 2>&1 | tee publish.log
+
+      - name: Записать отчёт
+        if: always()
+        run: |
+          {
+            echo "# Последняя публикация"
+            echo
+            echo "- Время (UTC): $(date -u '+%Y-%m-%d %H:%M')"
+            echo "- Коммит: ${GITHUB_SHA}"
+            echo "- Итог: ${{ job.status }}"
+            echo
+            echo '## Сборка'
+            echo '```'
+            tail -n 40 build.log 2>/dev/null || echo 'лога нет'
+            echo '```'
+            echo
+            echo '## Публикация'
+            echo '```'
+            tail -n 40 publish.log 2>/dev/null || echo 'лога нет'
+            echo '```'
+          } > LAST_PUBLISH.md
+
+          git config user.name "place-bot"
+          git config user.email "place-bot@users.noreply.github.com"
+          git add LAST_PUBLISH.md
+          git commit -m "Отчёт о публикации [skip ci]" || echo "нечего коммитить"
+          git push || echo "push не удался"
